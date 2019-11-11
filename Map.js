@@ -44,7 +44,7 @@ class Map extends Object {
   }
 
   set(key, value) {
-    const index = this._data.findIndex(item => item[0] === key)
+    const index = findKeyIndex(this, key)
     if (index > -1) {
       this._data.splice(index, 1, [key, value])
     } else {
@@ -54,12 +54,16 @@ class Map extends Object {
   }
 
   get(key) {
-    const result = this._data.find(item => item[0] === key)
-    return result ? result[1] : undefined
+    const index = findKeyIndex(this, key)
+    return index > -1 ? this._data[index] : undefined
+  }
+
+  has(key) {
+    return findKeyIndex(this, key) > -1
   }
 
   delete(key) {
-    const index = this._data.findIndex(item => item[0] === key)
+    const index = findKeyIndex(this, key)
     if (index > -1) {
       this._data.splice(index, 1)
       return true
@@ -93,3 +97,8 @@ class Map extends Object {
   }
 
 }
+
+function findKeyIndex(context, key) {
+  return context._data.findIndex(item => Object.is(item[0], key))
+}
+
