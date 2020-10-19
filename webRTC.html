@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webRTC test</title>
+</head>
+
+<body>
+  <video id="video-box" muted autoplay width="100px"></video><br/>
+  <button onclick="launch()">launch</button><br/>
+  <div id="logs"></div>
+  <script>
+    const ws = new WebSocket('ws://192.168.88.244:3010')
+    ws.onmessage = (event) => {
+      // console.log(event.data)
+      handleWsMsg(JSON.parse(event.data))
+    }
+
+    function wsSend(msg) {
+      ws.send(JSON.stringify(msg))
+    }
+    function wsSendOffer(offer) {
+      wsSend({ type: 'offer', data: offer })
+    }
+    function wsSendAnswer(answer) {
+      wsSend({ type: 'answer', data: answer })
+    }
+    function wsSendCandidate(candidate) {
+      wsSend({ type: 'candidate', data: candidate })
+    }
+    function handleWsMsg(msg) {
+      switch (msg.type) {
+        case 'offer':
+          handleReceiveOffer(msg.data)
+          break;
+        case 'answer':
+          handleReceiveAnswer(msg.data)
+          break;
+        case 'candidate':
+          handleReceiveCandidate(msg.data)
+          break;
+        default:
+          break;
+      }
+    }
+
+    async function handleReceiveOffer(offer) {
+      console.log('[rtc] [应答方流程] 收到发起方的 offer', offer)
+      console.log('[rtc] [应答方流程] 设置 offer 为远程描述')
+      const desc = new RTCSessionDescription(offer)
+      await rtc.setRemoteDescription(desc)
+      await addStream()
+      const answer = await rtc.createAnswer()
+      console.log('[rtc] [应答方流程] 创建 answer', answer)
+      console.log('[rtc] [应答方流程] 设置 answer 为本地描述')
+      await rtc.setLocalDescription(answer)
+      onBothDescriptionBeSet()
+
+      wsSendAnswer(answer)
+      console.log('[rtc] [应答方流程] 发送 answer 至信令服务器')
+    }
+
+    async function handleReceiveAnswer(answer) {
+      console.log('[rtc] [发起方流程] 收到应答方的 answer', answer)
+      console.log('[rtc] [发起方流程] 设置 answer 为远程描述')
+      await rtc.setRemoteDescription(new RTCSessionDescription(answer))
+      onBothDescriptionBeSet()
+    }
+
+    async function handleReceiveCandidate(candidate) {
+      console.log('[rtc] [candidate] 收到对方的 candidate')
+      setTimeout(() => {
+        console.log('[rtc] rtc.connectionState', rtc.connectionState)
+        console.log('[rtc] rtc.iceConnectionState', rtc.iceConnectionState)
+
+        console.log('[rtc] [candidate] 生成并添加 RTCIceCandidate')
+        rtc.addIceCandidate(new RTCIceCandidate(candidate))
+      }, 1000);
+    }
+
+    // local 和 remote
+    function onBothDescriptionBeSet() {
+      console.log('[rtc] 两端 Description 都已经设置完成')
+
+      console.log('----------------------------------')
+      sendAllUnsentCandidates()
+    }
+
+    const rtc = new RTCPeerConnection(
+      {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' }
+        ]
+      }
+    )
+
+
+    let candidates = []
+
+    rtc.onicecandidate = (event) => {
+      console.log('[rtc] [candidate] onicecandidate'
+        // , event.candidate
+      )
+      const { candidate } = event
+      if (!candidate) return
+
+      // 连接未完成: 保存 candidate, 待连接完成后发送
+      // 连接已完成: 发送 candidate
+      if (rtc.remoteDescription == null) {
+        console.log('[rtc] [candidate] 未设置 remoteDescription 先保存 candidate')
+        candidates.push(candidate)
+      } else {
+        console.log('[rtc] [candidate] addIceCandidate')
+        wsSendCandidate(candidate)
+      }
+    }
+
+    function sendAllUnsentCandidates() {
+      console.log('[rtc] [candidate] 发送所有未发送的 candidate')
+      candidates.forEach(wsSendCandidate)
+    }
+
+    rtc.onaddstream = (event) => {
+      console.log('[rtc] onaddstream', event)
+    }
+
+    rtc.ondatachannel = (event) => {
+      console.log('[rtc] ondatachannel', event)
+      listenDataChannel(event.channel)
+    }
+
+    rtc.onnegotiationneeded = (event) => {
+      console.log('[rtc] onnegotiationneeded', event)
+    }
+
+    rtc.onsignalingstatechange = (event) => {
+      console.log('[rtc] onsignalingstatechange')
+      console.log('[rtc] rtc.connectionState', rtc.connectionState)
+      console.log('[rtc] rtc.iceConnectionState', rtc.iceConnectionState)
+    }
+
+    async function invite() {
+      const offer = await rtc.createOffer()
+      console.log('[rtc] [发起方流程] 创建 offer', offer)
+      console.log('[rtc] [发起方流程] 设置 offer 为本地描述')
+      await rtc.setLocalDescription(offer)
+      wsSendOffer(offer)
+      console.log('[rtc] [发起方流程] 发送 offer 至信令服务器')
+    }
+
+
+    async function initVideo() {
+      if (navigator.mediaDevices === undefined) {
+        console.warn('只有在 https 或者 127.0.0.1 的情况下才开放 navigator.mediaDevices 接口')
+        const div = document.createElement('div')
+        div.innerText = '[ERROR] 只有在 https 或者 127.0.0.1 的情况下才开放 navigator.mediaDevices 接口'
+        document.getElementById('logs').appendChild(div) 
+        return Promise.reject('未开放 navigator.mediaDevices');
+      }
+
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      const videoDom = document.getElementById('video-box')
+      videoDom.srcObject = mediaStream
+      videoDom.play()
+      return mediaStream
+    }
+
+    async function addStream() {
+      try {
+        const mediaStream = await initVideo()
+        console.log('[rtc] 将 mediaStream 放入 rtc 通道')
+        // rtc.addStream(mediaStream)
+        mediaStream.getTracks().forEach(track => {
+          rtc.addTrack(track, mediaStream)
+        })
+      } catch (error) {
+        console.error(error)
+      }
+    }
+
+    async function launch() {
+      await addStream()
+      invite()
+    }
+
+    function dataChannel() {
+      const CHANNEL_LABEL = 'CHANNEL_LABEL'
+      const dataChannel = rtc.createDataChannel(CHANNEL_LABEL)
+      console.log('[rtc] [dataChannel] 发送建立数据通道请求', CHANNEL_LABEL)
+      listenDataChannel(dataChannel)
+
+      // dataChannel.send('test')
+      return dataChannel
+    }
+
+    function listenDataChannel(dataChannel) {
+      console.log('[rtc] [dataChannel] 开启事件监听')
+      dataChannel.onmessage = (event) => {
+        console.log('[rtc] [dataChannel] onmessage', event.data)
+      }
+      dataChannel.onopen = (event) => {
+        console.log('[rtc] [dataChannel] onopen')
+      }
+      dataChannel.onclose = (event) => {
+        console.log('[rtc] [dataChannel] onclose')
+      }
+      dataChannel.onerror = (error) => {
+        console.log('[rtc] [dataChannel] onerror', error)
+      }
+    }
+
+
+  </script>
+</body>
+
+</html>
